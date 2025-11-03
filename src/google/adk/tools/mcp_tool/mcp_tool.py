@@ -218,7 +218,12 @@ class McpTool(BaseAuthenticatedTool):
         headers=final_headers
     )
 
-    response = await session.call_tool(self._mcp_tool.name, arguments=args)
+    # Transform arguments to match MCP schema
+    transformed_args = self._transform_args_to_mcp_format(
+        args, self._mcp_tool.inputSchema
+    )
+
+    response = await session.call_tool(self._mcp_tool.name, arguments=transformed_args)
     return response.model_dump(exclude_none=True, mode="json")
 
   async def _get_headers(
@@ -304,6 +309,78 @@ class McpTool(BaseAuthenticatedTool):
         )
 
     return headers
+
+  def _transform_args_to_mcp_format(
+      self, args: Dict[str, Any], mcp_schema: Dict[str, Any]
+  ) -> Dict[str, Any]:
+    """Transform arguments to match MCP schema.
+
+    Handles cases where model output simplifies array-of-objects to
+    array-of-primitives for schemas with single-property objects.
+
+    Args:
+        args: Tool arguments from model output.
+        mcp_schema: MCP tool input schema.
+
+    Returns:
+        Transformed arguments matching schema, or original if no transformation needed.
+    """
+    if not args or not mcp_schema:
+      return args
+
+    properties = mcp_schema.get("properties", {})
+    if not properties:
+      return args
+
+    transformed = {}
+    for key, value in args.items():
+      if key in properties:
+        transformed[key] = self._transform_value_to_schema(value, properties[key])
+      else:
+        transformed[key] = value
+
+    return transformed
+
+  def _transform_value_to_schema(
+      self, value: Any, schema: Dict[str, Any]
+  ) -> Any:
+    """Transform value to match schema.
+
+    Args:
+        value: Value to transform.
+        schema: JSON schema for the value.
+
+    Returns:
+        Transformed value or original if no transformation needed.
+    """
+    if value is None or not schema:
+      return value
+
+    schema_type = schema.get("type")
+
+    if schema_type == "array" and isinstance(value, list) and value:
+      items_schema = schema.get("items")
+      if not items_schema or items_schema.get("type") != "object":
+        return value
+
+      if not isinstance(value[0], dict):
+        if not all(not isinstance(item, dict) for item in value):
+          logger.warning(
+              "Mixed types in array for MCP tool %s", self.name
+          )
+          return value
+
+        item_properties = items_schema.get("properties", {})
+        if len(item_properties) == 1:
+          property_name = next(iter(item_properties))
+          logger.debug(
+              "Transforming array for MCP tool %s with property '%s'",
+              self.name,
+              property_name,
+          )
+          return [{property_name: item} for item in value]
+
+    return value
 
 
 class MCPTool(McpTool):
