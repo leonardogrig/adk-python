@@ -732,3 +732,166 @@ class TestMCPTool:
     self.mock_session.call_tool.assert_called_once_with(
         "test_tool", arguments=args
     )
+
+  def test_transform_args_simple_types(self):
+    """Test that simple types are not transformed."""
+    schema = {
+        "properties": {
+            "name": {"type": "string"},
+            "count": {"type": "integer"},
+        }
+    }
+    self.mock_mcp_tool.inputSchema = schema
+    tool = MCPTool(
+        mcp_tool=self.mock_mcp_tool,
+        mcp_session_manager=self.mock_session_manager,
+    )
+
+    args = {"name": "test", "count": 42}
+    result = tool._transform_args_to_mcp_format(args, schema)
+
+    assert result == args
+
+  def test_transform_args_array_of_primitives_to_objects(self):
+    """Test transformation of array of primitives to array of objects."""
+    schema = {
+        "properties": {
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}},
+                },
+            }
+        }
+    }
+    self.mock_mcp_tool.inputSchema = schema
+    tool = MCPTool(
+        mcp_tool=self.mock_mcp_tool,
+        mcp_session_manager=self.mock_session_manager,
+    )
+
+    args = {"sources": ["web", "images"]}
+    result = tool._transform_args_to_mcp_format(args, schema)
+
+    expected = {"sources": [{"type": "web"}, {"type": "images"}]}
+    assert result == expected
+
+  def test_transform_args_already_correct_format(self):
+    """Test that already correct format is not modified."""
+    schema = {
+        "properties": {
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}},
+                },
+            }
+        }
+    }
+    self.mock_mcp_tool.inputSchema = schema
+    tool = MCPTool(
+        mcp_tool=self.mock_mcp_tool,
+        mcp_session_manager=self.mock_session_manager,
+    )
+
+    args = {"sources": [{"type": "web"}, {"type": "images"}]}
+    result = tool._transform_args_to_mcp_format(args, schema)
+
+    assert result == args
+
+  def test_transform_args_empty_array(self):
+    """Test transformation with empty array."""
+    schema = {
+        "properties": {
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}},
+                },
+            }
+        }
+    }
+    self.mock_mcp_tool.inputSchema = schema
+    tool = MCPTool(
+        mcp_tool=self.mock_mcp_tool,
+        mcp_session_manager=self.mock_session_manager,
+    )
+
+    args = {"sources": []}
+    result = tool._transform_args_to_mcp_format(args, schema)
+
+    assert result == {"sources": []}
+
+  def test_transform_args_no_transformation_for_multi_property_objects(self):
+    """Test that objects with multiple properties are not transformed."""
+    schema = {
+        "properties": {
+            "filters": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                },
+            }
+        }
+    }
+    self.mock_mcp_tool.inputSchema = schema
+    tool = MCPTool(
+        mcp_tool=self.mock_mcp_tool,
+        mcp_session_manager=self.mock_session_manager,
+    )
+
+    args = {"filters": ["field1", "field2"]}
+    result = tool._transform_args_to_mcp_format(args, schema)
+
+    assert result == args
+
+  @pytest.mark.asyncio
+  async def test_run_async_impl_transforms_args(self):
+    """Test that _run_async_impl applies argument transformation."""
+    schema = {
+        "properties": {
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}},
+                },
+            }
+        }
+    }
+    self.mock_mcp_tool.inputSchema = schema
+    tool = MCPTool(
+        mcp_tool=self.mock_mcp_tool,
+        mcp_session_manager=self.mock_session_manager,
+    )
+
+    mcp_response = CallToolResult(
+        content=[TextContent(type="text", text="success")]
+    )
+    self.mock_session.call_tool = AsyncMock(return_value=mcp_response)
+
+    tool_context = Mock(spec=ToolContext)
+    credential = None
+
+    # Model generates simplified format
+    args = {"sources": ["web", "images"]}
+
+    result = await tool._run_async_impl(
+        args=args, tool_context=tool_context, credential=credential
+    )
+
+    # Verify transformation was applied before calling MCP tool
+    self.mock_session.call_tool.assert_called_once()
+    call_args = self.mock_session.call_tool.call_args
+    transformed_args = call_args[1]["arguments"]
+
+    # Should be transformed to correct format
+    assert transformed_args == {"sources": [{"type": "web"}, {"type": "images"}]}
+    assert result == mcp_response.model_dump(exclude_none=True, mode="json")
